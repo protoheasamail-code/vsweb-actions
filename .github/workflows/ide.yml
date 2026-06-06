@@ -1,0 +1,147 @@
+name: VS Code Web IDE
+run-name: IDE Session (${{ inputs.git-user-name || github.actor }})
+
+permissions:
+  actions: read
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      session-timeout:
+        description: Max session duration in minutes (max 360 for hosted runners)
+        required: false
+        default: '360'
+      inactivity-timeout:
+        description: Minutes of inactivity before shutdown warning
+        required: false
+        default: '20'
+      extensions:
+        description: Comma-separated VS Code extension IDs (empty = none)
+        required: false
+        default: ''
+      connection-token:
+        description: VS Code auth token (auto-generated if empty)
+        required: false
+        default: ''
+      enable-ssh:
+        description: Enable SSH tunnel for Remote-SSH from desktop VS Code
+        required: false
+        default: false
+        type: boolean
+      dotfiles-uri:
+        description: Git URI of dotfiles repo (e.g., github.com/user/dotfiles)
+        required: false
+        default: ''
+      git-user-name:
+        description: Git user.name for commits (defaults to workflow trigger actor)
+        required: false
+        default: ''
+      git-user-email:
+        description: Git user.email for commits
+        required: false
+        default: ''
+      git-pat:
+        description: GitHub PAT with repo scope for git push from IDE (stored in /tmp/.git-creds, chmod 600)
+        required: false
+        default: ''
+
+env:
+  VSCODE_PORT: 3000
+  FILE_SERVER_PORT: 3001
+  TUNNEL_PORT: 3001
+  CONNECTION_TOKEN: ${{ inputs.connection-token }}
+  EXTENSIONS: ${{ inputs.extensions }}
+  DOTFILES_URI: ${{ inputs.dotfiles-uri }}
+  ENABLE_SSH: ${{ inputs.enable-ssh }}
+  INACTIVITY_TIMEOUT: ${{ inputs.inactivity-timeout }}
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_HOME: /usr/local/lib/android/sdk
+
+jobs:
+  ide:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.session-timeout) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore workspace from previous session
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list --workflow ide.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -n "$RUN_ID" ]; then
+            echo "Restoring workspace from run $RUN_ID"
+            gh run download "$RUN_ID" --name workspace-snapshot --dir /tmp/workspace-restore
+          else
+            echo "No previous successful run found, starting fresh"
+          fi
+
+      - name: Extract restored workspace
+        run: bash ${{ github.workspace }}/scripts/restore-workspace.sh
+
+      - name: Configure git identity and auth
+        if: inputs.git-pat != '' || inputs.git-user-name != '' || inputs.git-user-email != ''
+        env:
+          _GIT_PAT: ${{ inputs.git-pat }}
+        run: |
+          if [ -n "${{ inputs.git-user-name }}" ]; then
+            git config --global user.name "${{ inputs.git-user-name }}"
+          fi
+          if [ -n "${{ inputs.git-user-email }}" ]; then
+            git config --global user.email "${{ inputs.git-user-email }}"
+          fi
+          if [ -n "$_GIT_PAT" ]; then
+            echo "::add-mask::$_GIT_PAT"
+            git config --global credential.helper "store --file /tmp/.git-creds"
+            printf 'protocol=https\nhost=github.com\nusername=%s\npassword=%s\n' \
+              "${{ inputs.git-user-name || github.actor }}" "$_GIT_PAT" \
+              | git credential-store --file /tmp/.git-creds store
+            chmod 600 /tmp/.git-creds
+          fi
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup tools (OpenCode, Android, dotfiles, init)
+        run: bash ${{ github.workspace }}/scripts/setup-tools.sh
+
+      - name: Start IDE (openvscode-server + file explorer + tunnel)
+        run: bash ${{ github.workspace }}/scripts/start-ide.sh
+
+      - name: IDE session (create /continue to end, or wait for inactivity)
+        run: bash ${{ github.workspace }}/scripts/watch-inactivity.sh
+        env:
+          VSCODE_PORT: 3000
+          INACTIVITY_TIMEOUT: ${{ inputs.inactivity-timeout }}
+          SESSION_TIMEOUT: ${{ inputs.session-timeout }}
+
+      - name: Package workspace
+        if: always()
+        run: bash ${{ github.workspace }}/scripts/save-workspace.sh
+
+      - name: Upload workspace artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-snapshot
+          path: |
+            /tmp/workspace.tar.gz
+            /tmp/vscode-state.tar.gz
+          overwrite: true
+          retention-days: 30
+          compression-level: 0
+
+      - name: Cleanup services
+        if: always()
+        run: |
+          if [ -f /tmp/vscode-pids ]; then
+            while read -r pid; do
+              kill "$pid" 2>/dev/null || true
+            done < /tmp/vscode-pids
+            rm -f /tmp/vscode-pids
+          fi
+          rm -f /tmp/.git-creds
