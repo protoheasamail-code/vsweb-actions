@@ -33,6 +33,18 @@ on:
         description: Git URI of dotfiles repo (e.g., github.com/user/dotfiles)
         required: false
         default: ''
+      clone-repo:
+        description: 'Repo to clone (owner/name, https URL, or git@ URL). Cloned into <ide-root-dir>/<name>. Skipped if already present (restored).'
+        required: false
+        default: ''
+      clone-repo-ref:
+        description: 'Branch or tag to clone (only used with clone-repo)'
+        required: false
+        default: ''
+      ide-root-dir:
+        description: 'IDE working directory (default: /home/runner/work). Excludes pipe dirs when archived.'
+        required: false
+        default: '/home/runner/work'
       git-user-name:
         description: Git user.name for commits (defaults to workflow trigger actor)
         required: false
@@ -53,6 +65,8 @@ env:
   CONNECTION_TOKEN: ${{ inputs.connection-token }}
   EXTENSIONS: ${{ inputs.extensions }}
   DOTFILES_URI: ${{ inputs.dotfiles-uri }}
+  IDE_ROOT_DIR: ${{ inputs.ide-root-dir }}
+  DEFAULT_FOLDER: ${{ inputs.ide-root-dir }}
   ENABLE_SSH: ${{ inputs.enable-ssh }}
   INACTIVITY_TIMEOUT: ${{ inputs.inactivity-timeout }}
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -109,7 +123,20 @@ jobs:
       - name: Setup tools (OpenCode, Android, dotfiles, init)
         run: bash ${{ github.workspace }}/scripts/setup-tools.sh
 
+      - name: Clone repository (if requested)
+        id: clone
+        env:
+          CLONE_REPO: ${{ inputs.clone-repo }}
+          CLONE_REF: ${{ inputs.clone-repo-ref }}
+          GIT_PAT: ${{ inputs.git-pat }}
+          GIT_USER_NAME: ${{ inputs.git-user-name || github.actor }}
+          IDE_ROOT_DIR: ${{ inputs.ide-root-dir }}
+        run: bash ${{ github.workspace }}/scripts/clone-repo.sh
+
       - name: Start IDE (openvscode-server + file explorer + tunnel)
+        env:
+          IDE_ROOT_DIR: ${{ inputs.ide-root-dir }}
+          DEFAULT_FOLDER: ${{ steps.clone.outputs.target || inputs.ide-root-dir }}
         run: bash ${{ github.workspace }}/scripts/start-ide.sh
 
       - name: IDE session (create /continue to end, or wait for inactivity)
