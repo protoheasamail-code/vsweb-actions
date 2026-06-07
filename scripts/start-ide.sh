@@ -8,7 +8,9 @@ FILE_SERVER_PORT="${FILE_SERVER_PORT:-3001}"
 TUNNEL_PORT="${TUNNEL_PORT:-3001}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_DIR="${GITHUB_WORKSPACE:-$PWD}"
+IDE_ROOT_DIR="${IDE_ROOT_DIR:-/home/runner/work}"
+DEFAULT_FOLDER="${DEFAULT_FOLDER:-$IDE_ROOT_DIR}"
+WORKSPACE_DIR="$DEFAULT_FOLDER"
 
 mkdir -p /tmp/vscode-data
 
@@ -60,6 +62,16 @@ cat > /tmp/vscode-data/user-data/User/settings.json << 'SETTINGS'
 }
 SETTINGS
 
+# --- Workspace-level settings as a second-layer guarantee ---
+mkdir -p "$IDE_ROOT_DIR/.vscode"
+cat > "$IDE_ROOT_DIR/.vscode/settings.json" << 'WSETTINGS'
+{
+    "workbench.colorTheme": "Default Dark Modern",
+    "workbench.preferredDarkColorTheme": "Default Dark Modern",
+    "workbench.preferredLightColorTheme": "Default Dark Modern"
+}
+WSETTINGS
+
 # --- Start openvscode-server (token from file, not CLI arg) ---
 echo "Starting openvscode-server on port $VSCODE_PORT..."
 "$VSCODE_BIN" \
@@ -67,6 +79,7 @@ echo "Starting openvscode-server on port $VSCODE_PORT..."
   --host 0.0.0.0 \
   --connection-token-file "$TOKEN_FILE" \
   --server-data-dir /tmp/vscode-data \
+  --user-data-dir /tmp/vscode-data/user-data \
   --default-folder "$WORKSPACE_DIR" \
   &>/tmp/vscode-server.log &
 VSCODE_PID=$!

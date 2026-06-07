@@ -38,18 +38,72 @@ All configurable from the GitHub Actions UI when triggering the workflow:
 |-------|---------|-------------|
 | `session-timeout` | `360` | Max job duration (minutes). 360 max for GitHub-hosted runners. |
 | `inactivity-timeout` | `20` | Minutes of no browser connections before shutdown warning. |
-| `extensions` | `GitHub.copilot,...` | Comma-separated VS Code extension IDs to pre-install. |
+| `extensions` | `""` | Comma-separated VS Code extension IDs to pre-install. |
 | `connection-token` | auto-generated | Auth token for the VS Code web UI. |
 | `enable-ssh` | `false` | Also expose SSH via tunnel for Remote-SSH. |
 | `dotfiles-uri` | `""` | Git URI of a dotfiles repo to clone and run at startup. |
+| `clone-repo` | `""` | Repo to auto-clone and open. Accepts `owner/name`, `https://…`, or `git@…`. Cloned into `<ide-root-dir>/<name>`. Skipped if already present (restored). |
+| `clone-repo-ref` | `""` | Branch or tag to clone (used with `clone-repo`). |
+| `ide-root-dir` | `/home/runner/work` | Directory the IDE opens by default. Excludes pipe dirs (`_actions`, `_temp`, `_PipelineMapping`, `_runner_file_commands`, `_diag`) when archived. |
+| `git-user-name` | `${{ github.actor }}` | Git user.name for commits. |
+| `git-user-email` | `""` | Git user.email for commits. |
+| `git-pat` | `""` | GitHub PAT with `repo` scope for `git push` from the IDE and for cloning private repos. |
 
 ## Workspace Persistence
 
 - Workspace is **auto-saved every 30 minutes** as a GitHub Actions artifact
 - On the **next run**, the previous workspace is automatically restored
-- VS Code state (open files, extensions, settings) is also persisted
+- VS Code state (open files, extensions, settings) is also persisted in a separate tarball
 - Final save runs when you create `/continue` or inactivity timeout fires
-- Excluded from snapshot: `.git`, `node_modules`, `build/`, `target/`, `.gradle/`
+- The snapshot is **the entire IDE working directory** (default `/home/runner/work`)
+- Excluded from snapshot: `.git` (only for the workflow's own repo; cloned repos keep their `.git/` so local commits survive), `.gitignore`, `node_modules/`, `build/`, `target/`, `.gradle/`, `.kotlin/`, `__pycache__/`, `*.class`, `*.pyc`
+- Also excluded: GitHub Actions pipe dirs (`_actions`, `_temp`, `_PipelineMapping`, `_runner_file_commands`, `_diag`)
+- **Not in the snapshot** (reinstall in <15s, not worth saving): JDK, Android SDK, Node.js, Python, Docker — these live in `/opt/hostedtoolcache`, `/usr/local/lib/android`, or `/usr/bin`
+- The final save in `always()` logs `[save] mode=final workspace=…K (N files) state=…K (M files)` and prints a sample of the tarball contents for verification
+
+## Auto-Clone Repository
+
+Set `clone-repo` to automatically clone a repository and open it as the IDE's default folder. The clone is preserved across sessions because the entire working directory is snapshotted.
+
+```yaml
+# owner/name shorthand (private repos require git-pat)
+clone-repo: octocat/Hello-World
+
+# Full HTTPS URL
+clone-repo: https://github.com/octocat/Hello-World.git
+
+# SSH URL (requires SSH key configured on the runner)
+clone-repo: git@github.com:octocat/Hello-World.git
+```
+
+**Behavior:**
+- The repo is cloned into `<ide-root-dir>/<name>` (default: `/home/runner/work/<name>`)
+- The IDE's `--default-folder` is set to the cloned repo, so it opens directly
+- `clone-repo-ref` lets you pin a branch or tag (e.g., `clone-repo-ref: v1.0`)
+- For private repos, set the `git-pat` input (GitHub PAT with `repo` scope)
+- If the directory already exists (e.g., restored from a previous session), the clone step is skipped — your local work in the cloned repo is preserved
+- Clone failures are non-fatal: the IDE falls back to opening `<ide-root-dir>` instead
+
+**Local commits in cloned repos are saved** as part of the snapshot. This is because the snapshot includes the `.git/` directory of cloned repos (only the workflow's own repo's `.git/` is excluded, since `actions/checkout` re-fetches it on every run anyway).
+
+## Default Working Directory
+
+The IDE opens at `<ide-root-dir>/<name>` if `clone-repo` is set, or `<ide-root-dir>` otherwise. The default is `/home/runner/work`, which is the parent of where `actions/checkout@v4` places the workflow's own repo.
+
+You can change the root with the `ide-root-dir` input:
+
+```yaml
+ide-root-dir: /home/runner/work  # default
+# or
+ide-root-dir: /tmp/mywork
+```
+
+When saving the snapshot, the **entire** `<ide-root-dir>` is tarred, so:
+- Cloned repos at `<ide-root-dir>/<cloned-name>/` are preserved
+- Files you create anywhere under `<ide-root-dir>` are preserved
+- Hidden files (dotfiles) are preserved
+
+The IDE warning file `SESSION_INACTIVITY_WARNING.md` is also written to `<ide-root-dir>` so it appears in the file explorer.
 
 ## Session Lifecycle
 

@@ -13,7 +13,8 @@ if [ -f /tmp/tunnel-url ]; then
   TUNNEL_URL=$(cat /tmp/tunnel-url)
 fi
 
-WARNING_FILE="$GITHUB_WORKSPACE/SESSION_INACTIVITY_WARNING.md"
+IDE_ROOT_DIR="${IDE_ROOT_DIR:-/home/runner/work}"
+WARNING_FILE="$IDE_ROOT_DIR/SESSION_INACTIVITY_WARNING.md"
 CONTINUE_FILE="/continue"
 GRACE_MINUTES=5
 SAVE_INTERVAL=1800
@@ -26,11 +27,31 @@ echo "Job timeout: ${SESSION_TIMEOUT}m (auto-save at T-5m)"
 echo "Create '$CONTINUE_FILE' to end session and save workspace."
 echo ""
 
-if [ -n "$TUNNEL_URL" ]; then
+# Defense-in-depth: mask the token in all subsequent log output
+if [ -n "$CONNECTION_TOKEN" ]; then
+  echo "::add-mask::$CONNECTION_TOKEN"
+fi
+
+if [ -n "$TUNNEL_URL" ] && [ -n "$CONNECTION_TOKEN" ]; then
+  echo "============================================"
+  echo "  IDE URL (one-click):"
+  echo "    ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}"
+  echo ""
+  echo "  IDE URL (manual token entry):"
+  echo "    ${TUNNEL_URL}"
+  echo ""
+  echo "  File Browser:"
+  echo "    ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
+  echo ""
+  echo "  ACCESS TOKEN (keep secret):"
+  echo "    ${CONNECTION_TOKEN}"
+  echo "============================================"
+  echo ""
+elif [ -n "$TUNNEL_URL" ]; then
   echo "============================================"
   echo "  IDE URL:     $TUNNEL_URL"
   echo "  File Browser: $TUNNEL_URL/files/"
-  echo "  Token:       ${CONNECTION_TOKEN:0:8}... (check start-ide step logs)"
+  echo "  (no token found — check start-ide step logs)"
   echo "============================================"
   echo ""
 fi
