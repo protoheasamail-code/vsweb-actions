@@ -71,6 +71,7 @@ env:
   INACTIVITY_TIMEOUT: ${{ inputs.inactivity-timeout }}
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
   ANDROID_HOME: /usr/local/lib/android/sdk
+  DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
 
 jobs:
   ide:
@@ -79,20 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore workspace from previous session
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          RUN_ID=$(gh run list --workflow ide.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-          if [ -n "$RUN_ID" ]; then
-            echo "Restoring workspace from run $RUN_ID"
-            gh run download "$RUN_ID" --name workspace-snapshot --dir /tmp/workspace-restore
-          else
-            echo "No previous successful run found, starting fresh"
-          fi
-
-      - name: Extract restored workspace
-        run: bash ${{ github.workspace }}/scripts/restore-workspace.sh
+      - name: Notify session start
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "📦 **Checkout:** ✅ SUCCESS"
 
       - name: Configure git identity and auth
         if: inputs.git-pat != '' || inputs.git-user-name != '' || inputs.git-user-email != ''
@@ -114,14 +103,28 @@ jobs:
             chmod 600 /tmp/.git-creds
           fi
 
+      - name: Notify git config
+        if: inputs.git-pat != '' || inputs.git-user-name != '' || inputs.git-user-email != ''
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "🔑 **Git config:** ✅ SUCCESS"
+
+      - name: Notify git config skipped
+        if: inputs.git-pat == '' && inputs.git-user-name == '' && inputs.git-user-email == ''
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "🔑 **Git config:** ⏭️ SKIPPED"
+
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Notify Java setup
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "☕ **Java 21:** ✅ SUCCESS"
+
       - name: Setup tools (OpenCode, Android, dotfiles, init)
         run: bash ${{ github.workspace }}/scripts/setup-tools.sh
+
+      - name: Notify tools setup
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "🔧 **Tools setup:** ✅ SUCCESS"
 
       - name: Clone repository (if requested)
         id: clone
@@ -132,6 +135,15 @@ jobs:
           GIT_USER_NAME: ${{ inputs.git-user-name || github.actor }}
           IDE_ROOT_DIR: ${{ inputs.ide-root-dir }}
         run: bash ${{ github.workspace }}/scripts/clone-repo.sh
+
+      - name: Notify clone result
+        if: always()
+        run: |
+          if [ -n "${{ steps.clone.outputs.target }}" ]; then
+            bash ${{ github.workspace }}/scripts/discord-notify.sh "📋 **Clone:** ✅ SUCCESS"
+          else
+            bash ${{ github.workspace }}/scripts/discord-notify.sh "📋 **Clone:** ⏭️ SKIPPED"
+          fi
 
       - name: Start IDE (openvscode-server + file explorer + tunnel)
         env:
@@ -146,22 +158,6 @@ jobs:
           INACTIVITY_TIMEOUT: ${{ inputs.inactivity-timeout }}
           SESSION_TIMEOUT: ${{ inputs.session-timeout }}
 
-      - name: Package workspace
-        if: always()
-        run: bash ${{ github.workspace }}/scripts/save-workspace.sh
-
-      - name: Upload workspace artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workspace-snapshot
-          path: |
-            /tmp/workspace.tar.gz
-            /tmp/vscode-state.tar.gz
-          overwrite: true
-          retention-days: 30
-          compression-level: 0
-
       - name: Cleanup services
         if: always()
         run: |
@@ -172,3 +168,7 @@ jobs:
             rm -f /tmp/vscode-pids
           fi
           rm -f /tmp/.git-creds
+
+      - name: Notify cleanup
+        if: always()
+        run: bash ${{ github.workspace }}/scripts/discord-notify.sh "🧹 **Cleanup:** ✅ DONE"
