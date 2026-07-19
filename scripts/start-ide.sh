@@ -151,26 +151,14 @@ fi
 if [ -z "$TUNNEL_URL" ]; then
   echo "Warning: Cloudflare tunnel failed, falling back to localhost."
   echo "TUNNEL_URL=http://localhost:$TUNNEL_PORT" >> "$GITHUB_ENV"
-  echo "Tunnel log:"; cat /tmp/tunnel.log 2>/dev/null || true
 else
   echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
   echo "$TUNNEL_URL" > /tmp/tunnel-url
 
-  echo "============================================"
-  echo "  IDE URL (shareable without token):"
-  echo "  $TUNNEL_URL"
-  echo ""
-  echo "  File Browser:"
-  echo "  $TUNNEL_URL/files/"
-  echo ""
-  echo "---"
-  echo "  ACCESS TOKEN (keep secret — required to log in):"
-  echo "  $CONNECTION_TOKEN"
-  echo "---"
-  echo ""
-  echo "  To access VS Code, open the URL above and enter the token,"
-  echo "  or append ?tkn=$CONNECTION_TOKEN to the URL for one-click access."
-  echo "============================================"
+  # Notify Discord with the session URL
+  DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
+    bash "$SCRIPT_DIR/discord-notify.sh" \
+    "💻 **VS Code IDE started**\nURL: ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}\nFile Browser: ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
 fi
 
 # --- Optional SSH access ---
@@ -199,32 +187,11 @@ if [ "${ENABLE_SSH:-false}" = "true" ]; then
   done
 
   echo "SSH_URL=$SSH_URL" >> "$GITHUB_ENV"
-  echo ""
-  echo "============================================"
-  echo "  SSH ACCESS"
-  echo "============================================"
-  if [ -z "$SSH_URL" ]; then
-    echo "  SSH tunnel failed to start (check logs)"
-  else
-    SSH_HOST="${SSH_URL#https://}"
-    echo "  Host: $SSH_HOST"
-    echo ""
-    echo "  To connect, save the private key below to a file and run:"
-    echo "    ssh -o StrictHostKeyChecking=no -i /path/to/key runner@localhost \\"
-    echo "      -o ProxyCommand='cloudflared access tcp --hostname $SSH_HOST'"
-    echo ""
-    echo "  Or add to ~/.ssh/config:"
-    echo "    Host gha-ide"
-    echo "      HostName $SSH_HOST"
-    echo "      User runner"
-    echo "      StrictHostKeyChecking no"
-    echo "      ProxyCommand cloudflared access tcp --hostname %h"
-    echo "      IdentityFile ~/.ssh/gha-ide-key"
-    echo ""
-    echo "  Private key (save to ~/.ssh/gha-ide-key, chmod 600):"
-    cat "$SSH_KEY_FILE"
-    echo "============================================"
-  fi
+
+  # Notify Discord with SSH info
+  DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
+    bash "$SCRIPT_DIR/discord-notify.sh" \
+    "🔑 **SSH enabled**\nHost: ${SSH_URL#https://}"
 fi
 
 echo "::endgroup::"

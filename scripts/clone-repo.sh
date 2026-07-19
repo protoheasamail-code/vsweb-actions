@@ -70,15 +70,14 @@ if [ -n "$GIT_PAT" ] && [[ "$REPO_URL" =~ ^https://github.com/ ]]; then
   REPO_URL="https://${GIT_USER_NAME}:${GIT_PAT}@${REPO_URL#https://}"
 fi
 
-echo "Cloning $REPO_URL into $TARGET ..."
+echo "Cloning repository into $TARGET ..."
 
 # Redirect to log file (NOT a `tee` pipeline) so the exit code reflects git's status.
 if git "${CLONE_CMD_ARGS[@]}" "$REPO_URL" "$TARGET" > /tmp/clone-repo.log 2>&1; then
   echo "Clone successful"
   echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 else
-  echo "ERROR: git clone failed (see /tmp/clone-repo.log):"
-  tail -30 /tmp/clone-repo.log
+  echo "ERROR: git clone failed (check /tmp/clone-repo.log for details)"
   echo "target=" >> "$GITHUB_OUTPUT"
   exit 0  # do not fail the workflow
 fi

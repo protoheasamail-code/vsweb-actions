@@ -6,6 +6,8 @@ VSCODE_PORT="${VSCODE_PORT:-3000}"
 INACTIVITY_TIMEOUT="${INACTIVITY_TIMEOUT:-20}"
 SESSION_TIMEOUT="${SESSION_TIMEOUT:-360}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [ -f /tmp/connection-token ]; then
   CONNECTION_TOKEN=$(cat /tmp/connection-token)
 fi
@@ -17,43 +19,17 @@ IDE_ROOT_DIR="${IDE_ROOT_DIR:-/home/runner/work}"
 WARNING_FILE="$IDE_ROOT_DIR/SESSION_INACTIVITY_WARNING.md"
 CONTINUE_FILE="/continue"
 GRACE_MINUTES=5
-SAVE_INTERVAL=1800
 START_TIME=$(date +%s)
-LAST_SAVE=$START_TIME
 HALF_STEP=30
 
 echo "Session active. Inactivity timeout: ${INACTIVITY_TIMEOUT}m (grace: ${GRACE_MINUTES}m)"
-echo "Job timeout: ${SESSION_TIMEOUT}m (auto-save at T-5m)"
+echo "Job timeout: ${SESSION_TIMEOUT}m (session ends at T-0)"
 echo "Create '$CONTINUE_FILE' to end session and save workspace."
 echo ""
 
 # Defense-in-depth: mask the token in all subsequent log output
 if [ -n "$CONNECTION_TOKEN" ]; then
   echo "::add-mask::$CONNECTION_TOKEN"
-fi
-
-if [ -n "$TUNNEL_URL" ] && [ -n "$CONNECTION_TOKEN" ]; then
-  echo "============================================"
-  echo "  IDE URL (one-click):"
-  echo "    ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}"
-  echo ""
-  echo "  IDE URL (manual token entry):"
-  echo "    ${TUNNEL_URL}"
-  echo ""
-  echo "  File Browser:"
-  echo "    ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
-  echo ""
-  echo "  ACCESS TOKEN (keep secret):"
-  echo "    ${CONNECTION_TOKEN}"
-  echo "============================================"
-  echo ""
-elif [ -n "$TUNNEL_URL" ]; then
-  echo "============================================"
-  echo "  IDE URL:     $TUNNEL_URL"
-  echo "  File Browser: $TUNNEL_URL/files/"
-  echo "  (no token found — check start-ide step logs)"
-  echo "============================================"
-  echo ""
 fi
 
 cleanup() {
@@ -65,6 +41,13 @@ cleanup() {
     done < /tmp/vscode-pids
   fi
   rm -f "$WARNING_FILE"
+
+  # Notify Discord that the session ended
+  NOW=$(date +%s)
+  DURATION=$(( (NOW - START_TIME) / 60 ))
+  DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
+    bash "$SCRIPT_DIR/discord-notify.sh" \
+    "⏹️ **Session ended** (${DURATION}m active)"
 }
 trap cleanup EXIT
 
@@ -86,25 +69,15 @@ while true; do
   # Check for impending job timeout: save at T-5m
   REMAINING=$(( SESSION_TIMEOUT - ELAPSED ))
   if [ "$REMAINING" -le 1 ]; then
-    echo "Job timeout imminent. Auto-saving and ending session..."
+    echo "Job timeout imminent. Ending session..."
     touch "$CONTINUE_FILE"
     exit 0
   fi
 
   if [ "$REMAINING" -le 5 ] && [ "$timeout_warned" = false ]; then
     echo ""
-    echo "⚠️  Job timeout in ${REMAINING}m. Auto-saving workspace..."
-    SAVE_SCRIPT="$GITHUB_WORKSPACE/scripts/save-workspace.sh"
-    [ -f "$SAVE_SCRIPT" ] && bash "$SAVE_SCRIPT" "auto" || true
+    echo "⚠️  Job timeout in ${REMAINING}m. Session will end shortly..."
     timeout_warned=true
-  fi
-
-  # --- Periodic save ---
-  if [ $((NOW - LAST_SAVE)) -ge "$SAVE_INTERVAL" ]; then
-    echo "Auto-saving workspace..."
-    SAVE_SCRIPT="$GITHUB_WORKSPACE/scripts/save-workspace.sh"
-    [ -f "$SAVE_SCRIPT" ] && bash "$SAVE_SCRIPT" "auto" || true
-    LAST_SAVE=$NOW
   fi
 
   # --- Inactivity detection ---
