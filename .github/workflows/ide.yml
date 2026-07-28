@@ -204,6 +204,13 @@ jobs:
             rm -f /tmp/vscode-pids
           fi
           rm -f /tmp/.git-creds
+          # Disconnect Tailscale if it was used
+          if command -v tailscale &>/dev/null; then
+            sudo tailscale funnel --https=443 off 2>/dev/null || true
+            sudo tailscale funnel --http=80 off 2>/dev/null || true
+            sudo tailscale set --ssh=false 2>/dev/null || true
+            sudo tailscale down 2>/dev/null || true
+          fi
 
       - name: Notify cleanup
         if: always()

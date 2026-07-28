@@ -58,7 +58,7 @@ if [ -d "$TARGET" ]; then
 fi
 
 # --- Wire up credentials for private repos ---
-CLONE_CMD_ARGS=(clone --depth 1)
+CLONE_CMD_ARGS=(clone)
 if [ -n "$CLONE_REF" ]; then
   CLONE_CMD_ARGS+=(--branch "$CLONE_REF" --single-branch)
 fi
