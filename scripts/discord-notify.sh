@@ -22,6 +22,14 @@ fi
 # Mask the webhook URL in logs
 echo "::add-mask::$DISCORD_WEBHOOK"
 
+# Escape message for JSON (use jq if available, fall back to sed)
+if command -v jq &>/dev/null; then
+  JSON_PAYLOAD=$(jq -n --arg msg "$MESSAGE" '{"content": $msg}')
+else
+  ESCAPED=$(printf '%s' "$MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g')
+  JSON_PAYLOAD="{\"content\": \"${ESCAPED}\"}"
+fi
+
 MAX_RETRIES=3
 RETRY_DELAY=5
 
@@ -29,12 +37,7 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
   RESPONSE=$(curl -sS -o /dev/null -w "%{http_code}" \
     -X POST "$DISCORD_WEBHOOK" \
     -H "Content-Type: application/json" \
-    -d "$(cat <<JSON
-{
-  "content": "${MESSAGE}"
-}
-JSON
-)" 2>&1) && HTTP_CODE="$RESPONSE" || HTTP_CODE="000"
+    -d "$JSON_PAYLOAD" 2>&1) && HTTP_CODE="$RESPONSE" || HTTP_CODE="000"
 
   if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
     exit 0

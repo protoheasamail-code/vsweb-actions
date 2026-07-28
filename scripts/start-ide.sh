@@ -104,7 +104,9 @@ if [ -n "${EXTENSIONS:-}" ]; then
   IFS=',' read -ra EXT_ARRAY <<< "${EXTENSIONS}"
   for ext in "${EXT_ARRAY[@]}"; do
     ext=$(echo "$ext" | xargs)
-    [ -n "$ext" ] && "$VSCODE_BIN" --install-extension "$ext" --accept-license 2>/dev/null || true
+    if [ -n "$ext" ]; then
+      "$VSCODE_BIN" --install-extension "$ext" --accept-license 2>/dev/null || true
+    fi
   done
 fi
 
@@ -234,16 +236,16 @@ get_tailscale_hostname() {
 }
 
 start_tailscale_tunnel() {
-  TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+  ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
 
   if [ "$TAILSCALE_FUNNEL" = "true" ]; then
     echo "Starting Tailscale Funnel for HTTP..."
     sudo tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || {
       echo "Warning: Tailscale Funnel failed (non-fatal)"
     }
-    TUNNEL_URL="https://${TAILSCALE_HOSTNAME}"
+    TUNNEL_URL="https://${ACTUAL_TS_HOSTNAME}"
   else
-    TUNNEL_URL="http://${TAILSCALE_HOSTNAME}"
+    TUNNEL_URL="http://${ACTUAL_TS_HOSTNAME}"
   fi
 
   echo "$TUNNEL_URL" > /tmp/tunnel-url
@@ -298,24 +300,21 @@ case "$TUNNEL_PROVIDER" in
 
     if setup_tailscale; then
       TS_READY=true
-      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+      ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
 
       if [ "$TAILSCALE_FUNNEL" = "true" ]; then
         sudo tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || true
-        echo "Tailscale Funnel URL: https://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
-      else
-        echo "Tailscale URL: http://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
       fi
     fi
 
     # Primary URL: prefer cloudflared (more reliable for browser access)
     if [ "$CFD_READY" = "true" ] && [ -n "$TUNNEL_URL" ]; then
       echo ""
-      echo "Tailscale URL (private): http://${TAILSCALE_HOSTNAME:-<not connected>}"
+      echo "Tailscale URL (private): http://${ACTUAL_TS_HOSTNAME:-<not connected>}"
     elif [ "$TS_READY" = "true" ]; then
       # Tailscale-only fallback
-      TUNNEL_URL=$(grep -oP 'https?://[a-zA-Z0-9.-]+\.ts\.net' /tmp/tailscale-url 2>/dev/null | head -1 || \
-                    grep -oP 'http://[a-zA-Z0-9.-]+\.ts\.net' /tmp/tailscale-url 2>/dev/null | head -1 || true)
+      ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
+      TUNNEL_URL="http://${ACTUAL_TS_HOSTNAME}"
     else
       TUNNEL_URL="http://localhost:$TUNNEL_PORT"
     fi
@@ -376,9 +375,9 @@ if [ "$ENABLE_SSH" = "true" ]; then
     tailscale)
       # Tailscale SSH: built-in, uses Tailscale identity for auth (no keys needed)
       # (tailscale set --ssh already ran in setup_tailscale)
-      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+      ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
       echo "Using Tailscale built-in SSH (auth via Tailscale identity)..."
-      echo "Connect: ssh $(whoami)@${TAILSCALE_HOSTNAME}"
+      echo "Connect: ssh $(whoami)@${ACTUAL_TS_HOSTNAME}"
       echo ""
       echo "Note: Ensure 'SSH' is enabled in your Tailscale ACLs for this node."
       echo "See: https://tailscale.com/kb/1193/acls/#ssh-access"
@@ -407,8 +406,8 @@ if [ "$ENABLE_SSH" = "true" ]; then
       fi
 
       # Tailscale SSH (built-in, tailscale set --ssh already ran in setup_tailscale)
-      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
-      echo "Tailscale SSH: ssh $(whoami)@${TAILSCALE_HOSTNAME}"
+      ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
+      echo "Tailscale SSH: ssh $(whoami)@${ACTUAL_TS_HOSTNAME}"
       echo ""
       echo "Note: Ensure 'SSH' is enabled in your Tailscale ACLs for this node."
       ;;
