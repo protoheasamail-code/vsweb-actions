@@ -341,7 +341,8 @@ echo "$TUNNEL_URL" > /tmp/tunnel-url
 # --- Discord notification ---
 DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
   bash "$SCRIPT_DIR/discord-notify.sh" \
-  "💻 **VS Code IDE started**\nURL: ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}\nFile Browser: ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
+  "$(printf '💻 **VS Code IDE started**\nURL: %s/?tkn=%s\nFile Browser: %s/files/?tkn=%s' \
+    "$TUNNEL_URL" "$CONNECTION_TOKEN" "$TUNNEL_URL" "$CONNECTION_TOKEN")"
 
 # --- Optional SSH access ---
 if [ "$ENABLE_SSH" = "true" ]; then
@@ -416,7 +417,7 @@ if [ "$ENABLE_SSH" = "true" ]; then
   # Discord notification for SSH
   DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
     bash "$SCRIPT_DIR/discord-notify.sh" \
-    "🔑 **SSH enabled**\nProvider: ${TUNNEL_PROVIDER}"
+    "$(printf '🔑 **SSH enabled**\nProvider: %s' "$TUNNEL_PROVIDER")"
 fi
 
 echo "::endgroup::"
