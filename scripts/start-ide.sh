@@ -6,6 +6,10 @@ echo "::group::Start IDE"
 VSCODE_PORT="${VSCODE_PORT:-3000}"
 FILE_SERVER_PORT="${FILE_SERVER_PORT:-3001}"
 TUNNEL_PORT="${TUNNEL_PORT:-3001}"
+TUNNEL_PROVIDER="${TUNNEL_PROVIDER:-cloudflared}"
+TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+TAILSCALE_FUNNEL="${TAILSCALE_FUNNEL:-false}"
+ENABLE_SSH="${ENABLE_SSH:-false}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IDE_ROOT_DIR="${IDE_ROOT_DIR:-/home/runner/work}"
@@ -111,70 +115,58 @@ echo $FILE_SERVER_PID >> /tmp/vscode-pids
 
 sleep 1
 
-# --- Start cloudflared tunnel ---
-echo "Starting Cloudflare tunnel..."
-TUNNEL_URL=""
+# ============================================================================
+# Cloudflare tunnel
+# ============================================================================
+setup_cloudflared() {
+  echo "Setting up Cloudflare tunnel..."
 
-# Get latest cloudflared version via API
-CFD_VERSION=$(curl -sL \
-  "https://api.github.com/repos/cloudflare/cloudflared/releases/latest" \
-  | grep '"tag_name":' | cut -d'"' -f4)
+  CFD_VERSION=$(curl -sL \
+    "https://api.github.com/repos/cloudflare/cloudflared/releases/latest" \
+    | grep '"tag_name":' | cut -d'"' -f4)
 
-if [ -n "$CFD_VERSION" ]; then
-  echo "Downloading cloudflared $CFD_VERSION..."
-  CFD_DL_URL="https://github.com/cloudflare/cloudflared/releases/download/${CFD_VERSION}/cloudflared-linux-amd64"
-  curl -fL -o /tmp/cloudflared "$CFD_DL_URL" 2>/dev/null || true
+  if [ -n "$CFD_VERSION" ]; then
+    echo "Downloading cloudflared $CFD_VERSION..."
+    CFD_DL_URL="https://github.com/cloudflare/cloudflared/releases/download/${CFD_VERSION}/cloudflared-linux-amd64"
+    curl -fL -o /tmp/cloudflared "$CFD_DL_URL" 2>/dev/null || true
 
-  if file /tmp/cloudflared 2>/dev/null | grep -q ELF; then
-    chmod +x /tmp/cloudflared
-
-    # Start tunnel
-    /tmp/cloudflared tunnel --url "http://localhost:$TUNNEL_PORT" \
-      --loglevel debug \
-      &>/tmp/tunnel.log &
-    TUNNEL_PID=$!
-    echo $TUNNEL_PID >> /tmp/vscode-pids
-
-    # Wait for tunnel URL
-    for i in $(seq 1 30); do
-      TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1 || true)
-      if [ -n "$TUNNEL_URL" ]; then break; fi
-      sleep 1
-    done
+    if file /tmp/cloudflared 2>/dev/null | grep -q ELF; then
+      chmod +x /tmp/cloudflared
+      return 0
+    else
+      echo "Downloaded file is not a valid binary"
+      return 1
+    fi
   else
-    echo "Downloaded file is not a valid binary"
+    echo "Could not determine cloudflared version"
+    return 1
   fi
-else
-  echo "Could not determine cloudflared version"
-fi
+}
 
-if [ -z "$TUNNEL_URL" ]; then
-  echo "Warning: Cloudflare tunnel failed, falling back to localhost."
-  echo "TUNNEL_URL=http://localhost:$TUNNEL_PORT" >> "$GITHUB_ENV"
-else
-  echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+start_cloudflared_tunnel() {
+  /tmp/cloudflared tunnel --url "http://localhost:$TUNNEL_PORT" \
+    --loglevel debug \
+    &>/tmp/tunnel.log &
+  TUNNEL_PID=$!
+  echo $TUNNEL_PID >> /tmp/vscode-pids
+
+  TUNNEL_URL=""
+  for i in $(seq 1 30); do
+    TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1 || true)
+    if [ -n "$TUNNEL_URL" ]; then break; fi
+    sleep 1
+  done
+
+  if [ -z "$TUNNEL_URL" ]; then
+    echo "Warning: Cloudflare tunnel failed"
+    return 1
+  fi
+
   echo "$TUNNEL_URL" > /tmp/tunnel-url
+  return 0
+}
 
-  # Notify Discord with the session URL
-  DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
-    bash "$SCRIPT_DIR/discord-notify.sh" \
-    "💻 **VS Code IDE started**\nURL: ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}\nFile Browser: ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
-fi
-
-# --- Optional SSH access ---
-if [ "${ENABLE_SSH:-false}" = "true" ]; then
-  echo "Setting up SSH access..."
-
-  SSH_KEY_FILE=/tmp/ssh-key
-  ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q
-
-  mkdir -p ~/.ssh
-  chmod 700 ~/.ssh
-  cat "$SSH_KEY_FILE.pub" >> ~/.ssh/authorized_keys
-  chmod 600 ~/.ssh/authorized_keys
-
-  sudo systemctl start sshd 2>/dev/null || sudo service ssh start 2>/dev/null || true
-
+start_cloudflared_ssh_tunnel() {
   /tmp/cloudflared tunnel --url ssh://localhost:22 --loglevel debug &>/tmp/tunnel-ssh.log &
   SSH_TUNNEL_PID=$!
   echo $SSH_TUNNEL_PID >> /tmp/vscode-pids
@@ -186,12 +178,238 @@ if [ "${ENABLE_SSH:-false}" = "true" ]; then
     sleep 1
   done
 
-  echo "SSH_URL=$SSH_URL" >> "$GITHUB_ENV"
+  echo "$SSH_URL" > /tmp/ssh-tunnel-url
+}
 
-  # Notify Discord with SSH info
+# ============================================================================
+# Tailscale
+# ============================================================================
+setup_tailscale() {
+  echo "Setting up Tailscale..."
+
+  if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+    echo "Tailscale already running"
+    return 0
+  fi
+
+  echo "Installing Tailscale..."
+  curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null || {
+    echo "ERROR: Tailscale install failed"
+    return 1
+  }
+
+  if [ -z "$TAILSCALE_AUTH_KEY" ]; then
+    echo "ERROR: tailscale-auth-key is required when using Tailscale"
+    return 1
+  fi
+
+  echo "Joining Tailscale network..."
+  tailscale up --auth-key="$TAILSCALE_AUTH_KEY" --hostname="$(hostname)" 2>&1 || {
+    echo "ERROR: Tailscale up failed"
+    return 1
+  }
+
+  # Enable Tailscale SSH (uses Tailscale identity for auth)
+  if [ "$ENABLE_SSH" = "true" ]; then
+    echo "Enabling Tailscale SSH..."
+    tailscale set --ssh 2>&1 || {
+      echo "Warning: Failed to enable Tailscale SSH (non-fatal)"
+    }
+  fi
+
+  return 0
+}
+
+get_tailscale_hostname() {
+  tailscale status --json 2>/dev/null | grep -oP '"Self":\s*\{[^}]*"DNSName":\s*"[^"]*"' \
+    | grep -oP '"DNSName":\s*"\K[^"]+' || true
+}
+
+start_tailscale_tunnel() {
+  TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+
+  if [ "$TAILSCALE_FUNNEL" = "true" ]; then
+    echo "Starting Tailscale Funnel for HTTP..."
+    tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || {
+      echo "Warning: Tailscale Funnel failed (non-fatal)"
+    }
+    TUNNEL_URL="https://${TAILSCALE_HOSTNAME}"
+  else
+    TUNNEL_URL="http://${TAILSCALE_HOSTNAME}"
+  fi
+
+  echo "$TUNNEL_URL" > /tmp/tunnel-url
+}
+
+start_tailscale_ssh_tunnel() {
+  if [ "$TAILSCALE_FUNNEL" = "true" ]; then
+    echo "Starting Tailscale Funnel for SSH..."
+    tailscale funnel --bg tcp://22 2>&1 || {
+      echo "Warning: Tailscale SSH Funnel failed (non-fatal)"
+    }
+  fi
+  # When not using Funnel, SSH is reachable directly via the tailnet hostname
+}
+
+# ============================================================================
+# Provider dispatch
+# ============================================================================
+TUNNEL_URL=""
+
+case "$TUNNEL_PROVIDER" in
+  cloudflared)
+    if setup_cloudflared; then
+      if ! start_cloudflared_tunnel; then
+        echo "Falling back to localhost."
+        TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+      fi
+    else
+      echo "Cloudflared unavailable, falling back to localhost."
+      TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+    fi
+    ;;
+
+  tailscale)
+    if setup_tailscale; then
+      start_tailscale_tunnel
+    else
+      echo "Tailscale unavailable, falling back to localhost."
+      TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+    fi
+    ;;
+
+  both)
+    CFD_READY=false
+    TS_READY=false
+
+    if setup_cloudflared; then
+      if start_cloudflared_tunnel; then
+        CFD_READY=true
+      fi
+    fi
+
+    if setup_tailscale; then
+      TS_READY=true
+      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+
+      if [ "$TAILSCALE_FUNNEL" = "true" ]; then
+        tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || true
+        echo "Tailscale Funnel URL: https://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
+      else
+        echo "Tailscale URL: http://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
+      fi
+    fi
+
+    # Primary URL: prefer cloudflared (more reliable for browser access)
+    if [ "$CFD_READY" = "true" ] && [ -n "$TUNNEL_URL" ]; then
+      echo ""
+      echo "Tailscale URL (private): http://${TAILSCALE_HOSTNAME:-<not connected>}"
+    elif [ "$TS_READY" = "true" ]; then
+      # Tailscale-only fallback
+      TUNNEL_URL=$(grep -oP 'https?://[a-zA-Z0-9.-]+\.ts\.net' /tmp/tailscale-url 2>/dev/null | head -1 || \
+                    grep -oP 'http://[a-zA-Z0-9.-]+\.ts\.net' /tmp/tailscale-url 2>/dev/null | head -1 || true)
+    else
+      TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+    fi
+    ;;
+
+  *)
+    echo "Unknown tunnel-provider: $TUNNEL_PROVIDER (falling back to cloudflared)"
+    if setup_cloudflared && start_cloudflared_tunnel; then
+      : # TUNNEL_URL set by start_cloudflared_tunnel
+    else
+      TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+    fi
+    ;;
+esac
+
+# --- Set TUNNEL_URL env ---
+if [ -z "$TUNNEL_URL" ]; then
+  echo "Warning: No tunnel URL available, falling back to localhost."
+  TUNNEL_URL="http://localhost:$TUNNEL_PORT"
+fi
+echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+echo "$TUNNEL_URL" > /tmp/tunnel-url
+
+# --- Discord notification ---
+DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
+  bash "$SCRIPT_DIR/discord-notify.sh" \
+  "💻 **VS Code IDE started**\nURL: ${TUNNEL_URL}/?tkn=${CONNECTION_TOKEN}\nFile Browser: ${TUNNEL_URL}/files/?tkn=${CONNECTION_TOKEN}"
+
+# --- Optional SSH access ---
+if [ "$ENABLE_SSH" = "true" ]; then
+  echo ""
+  echo "Setting up SSH access..."
+
+  case "$TUNNEL_PROVIDER" in
+    cloudflared)
+      # Traditional SSH: generate keypair, start sshd, cloudflared TCP tunnel
+      echo "Using cloudflared TCP tunnel for SSH..."
+
+      SSH_KEY_FILE=/tmp/ssh-key
+      ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q
+
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      cat "$SSH_KEY_FILE.pub" >> ~/.ssh/authorized_keys
+      chmod 600 ~/.ssh/authorized_keys
+
+      sudo systemctl start sshd 2>/dev/null || sudo service ssh start 2>/dev/null || true
+
+      if [ -x /tmp/cloudflared ]; then
+        start_cloudflared_ssh_tunnel
+        SSH_URL=$(cat /tmp/ssh-tunnel-url 2>/dev/null || true)
+        echo "SSH_URL=$SSH_URL" >> "$GITHUB_ENV"
+      else
+        echo "Warning: cloudflared not available for SSH tunnel"
+      fi
+      ;;
+
+    tailscale)
+      # Tailscale SSH: built-in, uses Tailscale identity for auth (no keys needed)
+      # (tailscale set --ssh already ran in setup_tailscale)
+      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+      echo "Using Tailscale built-in SSH (auth via Tailscale identity)..."
+      echo "Connect: ssh $(whoami)@${TAILSCALE_HOSTNAME}"
+      echo ""
+      echo "Note: Ensure 'SSH' is enabled in your Tailscale ACLs for this node."
+      echo "See: https://tailscale.com/kb/1193/acls/#ssh-access"
+      ;;
+
+    both)
+      # Both: traditional SSH via cloudflared + Tailscale SSH
+      echo "Using both cloudflared TCP tunnel + Tailscale built-in SSH..."
+
+      # Traditional SSH keypair + sshd (for cloudflared path)
+      SSH_KEY_FILE=/tmp/ssh-key
+      ssh-keygen -t ed25519 -f "$SSH_KEY_FILE" -N "" -q
+
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      cat "$SSH_KEY_FILE.pub" >> ~/.ssh/authorized_keys
+      chmod 600 ~/.ssh/authorized_keys
+
+      sudo systemctl start sshd 2>/dev/null || sudo service ssh start 2>/dev/null || true
+
+      # Cloudflare TCP tunnel for SSH
+      if [ -x /tmp/cloudflared ]; then
+        start_cloudflared_ssh_tunnel
+        SSH_URL=$(cat /tmp/ssh-tunnel-url 2>/dev/null || true)
+        echo "SSH_URL=$SSH_URL" >> "$GITHUB_ENV"
+      fi
+
+      # Tailscale SSH (built-in, tailscale set --ssh already ran in setup_tailscale)
+      TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
+      echo "Tailscale SSH: ssh $(whoami)@${TAILSCALE_HOSTNAME}"
+      echo ""
+      echo "Note: Ensure 'SSH' is enabled in your Tailscale ACLs for this node."
+      ;;
+  esac
+
+  # Discord notification for SSH
   DISCORD_WEBHOOK="$DISCORD_WEBHOOK" \
     bash "$SCRIPT_DIR/discord-notify.sh" \
-    "🔑 **SSH enabled**\nHost: ${SSH_URL#https://}"
+    "🔑 **SSH enabled**\nProvider: ${TUNNEL_PROVIDER}"
 fi
 
 echo "::endgroup::"
