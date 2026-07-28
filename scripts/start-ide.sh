@@ -221,8 +221,8 @@ setup_tailscale() {
 }
 
 get_tailscale_hostname() {
-  sudo tailscale status --json 2>/dev/null | grep -oP '"Self":\s*\{[^}]*"DNSName":\s*"[^"]*"' \
-    | grep -oP '"DNSName":\s*"\K[^"]+' || true
+  # jq is available on GitHub Actions runners (Node.js ships with it)
+  sudo tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null || true
 }
 
 start_tailscale_tunnel() {
