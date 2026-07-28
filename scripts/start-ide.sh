@@ -187,7 +187,7 @@ start_cloudflared_ssh_tunnel() {
 setup_tailscale() {
   echo "Setting up Tailscale..."
 
-  if command -v tailscale &>/dev/null && tailscale status &>/dev/null 2>&1; then
+  if command -v tailscale &>/dev/null && sudo tailscale status &>/dev/null 2>&1; then
     echo "Tailscale already running"
     return 0
   fi
@@ -204,7 +204,7 @@ setup_tailscale() {
   fi
 
   echo "Joining Tailscale network..."
-  tailscale up --auth-key="$TAILSCALE_AUTH_KEY" --hostname="$(hostname)" 2>&1 || {
+  sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" --hostname="$(hostname)" 2>&1 || {
     echo "ERROR: Tailscale up failed"
     return 1
   }
@@ -212,7 +212,7 @@ setup_tailscale() {
   # Enable Tailscale SSH (uses Tailscale identity for auth)
   if [ "$ENABLE_SSH" = "true" ]; then
     echo "Enabling Tailscale SSH..."
-    tailscale set --ssh 2>&1 || {
+    sudo tailscale set --ssh 2>&1 || {
       echo "Warning: Failed to enable Tailscale SSH (non-fatal)"
     }
   fi
@@ -221,7 +221,7 @@ setup_tailscale() {
 }
 
 get_tailscale_hostname() {
-  tailscale status --json 2>/dev/null | grep -oP '"Self":\s*\{[^}]*"DNSName":\s*"[^"]*"' \
+  sudo tailscale status --json 2>/dev/null | grep -oP '"Self":\s*\{[^}]*"DNSName":\s*"[^"]*"' \
     | grep -oP '"DNSName":\s*"\K[^"]+' || true
 }
 
@@ -230,7 +230,7 @@ start_tailscale_tunnel() {
 
   if [ "$TAILSCALE_FUNNEL" = "true" ]; then
     echo "Starting Tailscale Funnel for HTTP..."
-    tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || {
+    sudo tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || {
       echo "Warning: Tailscale Funnel failed (non-fatal)"
     }
     TUNNEL_URL="https://${TAILSCALE_HOSTNAME}"
@@ -244,7 +244,7 @@ start_tailscale_tunnel() {
 start_tailscale_ssh_tunnel() {
   if [ "$TAILSCALE_FUNNEL" = "true" ]; then
     echo "Starting Tailscale Funnel for SSH..."
-    tailscale funnel --bg tcp://22 2>&1 || {
+    sudo tailscale funnel --bg tcp://22 2>&1 || {
       echo "Warning: Tailscale SSH Funnel failed (non-fatal)"
     }
   fi
@@ -293,7 +293,7 @@ case "$TUNNEL_PROVIDER" in
       TAILSCALE_HOSTNAME=$(get_tailscale_hostname)
 
       if [ "$TAILSCALE_FUNNEL" = "true" ]; then
-        tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || true
+        sudo tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || true
         echo "Tailscale Funnel URL: https://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
       else
         echo "Tailscale URL: http://${TAILSCALE_HOSTNAME}" > /tmp/tailscale-url
