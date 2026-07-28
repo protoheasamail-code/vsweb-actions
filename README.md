@@ -19,7 +19,7 @@ https://<random>.trycloudflare.com/?tkn=<token>
 |---------|----------|-------------|
 | VS Code IDE | `/` | Full VS Code in browser (same engine as Codespaces) |
 | File Browser | `/files/` | Dark-themed file explorer, browse & download any file |
-| SSH (opt-in) | — | Tunnel for Remote-SSH from desktop VS Code |
+| SSH (opt-in) | — | Remote-SSH from desktop VS Code (cloudflared tunnel or Tailscale) |
 
 ## Pre-Installed
 
@@ -48,6 +48,10 @@ All configurable from the GitHub Actions UI when triggering the workflow:
 | `git-user-name` | `${{ github.actor }}` | Git user.name for commits. |
 | `git-user-email` | `""` | Git user.email for commits. |
 | `git-pat` | `""` | GitHub PAT with `repo` scope for `git push` from the IDE and for cloning private repos. |
+| `tunnel-provider` | `cloudflared` | Tunnel backend: `cloudflared`, `tailscale`, or `both`. |
+| `tailscale-auth-key` | `""` | Pre-auth Tailscale auth key (required when using Tailscale). Generate at https://login.tailscale.com/admin/settings/keys |
+| `tailscale-funnel` | `false` | When using Tailscale, expose publicly via [Tailscale Funnel](https://tailscale.com/kb/1223/funnel/) instead of tailnet-only. |
+| `tailscale-hostname` | `""` | Fixed Tailscale node name (e.g. `vscode-ide`). Default uses the runner hostname which changes each run. |
 
 ## Workspace Persistence
 
@@ -147,7 +151,10 @@ echo "Custom setup complete!"
 
 ## SSH Access (opt-in)
 
-When `enable-ssh: true`, the workflow:
+When `enable-ssh: true`, SSH access is configured based on your tunnel provider:
+
+### Cloudflared (default)
+
 1. Generates an ed25519 keypair
 2. Starts SSHD
 3. Creates a separate Cloudflare TCP tunnel for SSH
@@ -160,6 +167,69 @@ Connect from your local VS Code via Remote-SSH:
 ssh -o StrictHostKeyChecking=no -i /path/to/saved-key runner@<tunnel-host> \
   -o ProxyCommand='cloudflared access tcp --hostname %h'
 ```
+
+### Tailscale
+
+When using `tunnel-provider: tailscale` or `both`, SSH uses **Tailscale's built-in SSH server**. No sshd or keypair is needed — authentication is handled by your Tailscale identity.
+
+1. Ensure the `SSH` policy is enabled for this node in your Tailscale ACLs
+2. Connect from any machine on your tailnet:
+
+```bash
+ssh runner@<hostname>.<tailnet>.ts.net
+```
+
+When `tailscale-funnel: true`, SSH is also publicly reachable via the Funnel URL.
+
+## Tailscale Setup
+
+Tailscale provides an alternative to Cloudflare tunnels. It joins your runner to your private Tailscale network (tailnet), giving you stable hostnames and built-in SSH.
+
+### Prerequisites
+
+1. A [Tailscale account](https://login.tailscale.com/)
+2. A pre-authentication key from [Tailscale Admin → Settings → Keys](https://login.tailscale.com/admin/settings/keys)
+   - Go to **Settings → Keys → Generate auth key**
+   - Enable **Reusable** if you want to reuse the key across sessions
+   - Enable **Ephemeral** if you want nodes to be removed when the runner shuts down
+
+### Access Modes
+
+| Mode | Setting | Access | URL Format |
+|------|---------|--------|------------|
+| **Tailnet-only** | `tailscale-funnel: false` | Private — only machines on your tailnet | `http://<hostname>.<tailnet>.ts.net` |
+| **Funnel** | `tailscale-funnel: true` | Public — anyone with the URL | `https://<hostname>.<tailnet>.ts.net` |
+
+### Usage
+
+```yaml
+# Private access via Tailscale (requires Tailscale on your local machine)
+tunnel-provider: tailscale
+tailscale-auth-key: tskey-auth-kHxxxx...
+
+# With a fixed hostname (same URL every run)
+tunnel-provider: tailscale
+tailscale-auth-key: tskey-auth-kHxxxx...
+tailscale-hostname: vscode-ide
+
+# Public access via Tailscale Funnel
+tunnel-provider: tailscale
+tailscale-auth-key: tskey-auth-kHxxxx...
+tailscale-funnel: true
+
+# Both cloudflared + Tailscale (cloudflared is primary URL)
+tunnel-provider: both
+tailscale-auth-key: tskey-auth-kHxxxx...
+```
+
+### Connecting
+
+| What | Command |
+|------|---------|
+| **Browser (tailnet)** | Open `http://<hostname>.<tailnet>.ts.net/?tkn=TOKEN` |
+| **Browser (funnel)** | Open `https://<hostname>.<tailnet>.ts.net/?tkn=TOKEN` |
+| **VS Code Remote-SSH (tailnet)** | `ssh runner@<hostname>.<tailnet>.ts.net` |
+| **VS Code Remote-SSH (funnel)** | `ssh runner@<hostname>.<tailnet>.ts.net` (port 22 exposed via Funnel) |
 
 ## Security
 
@@ -178,7 +248,8 @@ If you open the URL without the token, VS Code will show a login page asking for
 
 | Layer | What it protects against |
 |-------|--------------------------|
-| **Random tunnel URL** | Random discovery / scanning bots |
+| **Random tunnel URL** | Random discovery / scanning bots (cloudflared) |
+| **Tailscale tailnet** | Only machines on your private network can connect |
 | **Connection token** | Anyone who finds the URL (log viewers, browser history) |
 | **Token stored in file** | Not visible in `ps` process listings (`--connection-token-file`) |
 | **GitHub Actions auth** | Only users with repo access can see the logs (repo access required) |
@@ -193,6 +264,8 @@ If you open the URL without the token, VS Code will show a login page asking for
 | Someone finds the token | **Can't access** — need the URL too |
 | Someone has repo read access | **Can access** — they can see both in logs. Protect your repo. |
 | You bookmark the URL with `?tkn=...` | **Moderate** — browser history leak. Use separate URL + token. |
+| Tailscale tailnet-only mode | **Private** — only machines on your tailnet can reach the runner. No public URL. |
+| Tailscale Funnel mode | **Similar to cloudflared** — public URL, token still required. |
 
 ### For Maximum Security (Cloudflare Access)
 
@@ -209,6 +282,8 @@ This gives you **three layers**: Cloudflare Access → VS Code token → inactiv
 
 When `enable-ssh: true`, the private key is printed in the action logs. Anyone with repo access can see it. Keys are ephemeral (new every session). For production use, consider Cloudflare Access for SSH instead.
 
+When using Tailscale, SSH authentication is handled via Tailscale identity — no keypair is generated or printed. Access is controlled by your Tailscale ACLs (see [Tailscale SSH docs](https://tailscale.com/kb/1193/acls/#ssh-access)).
+
 ### File Browser
 
 The file explorer at `/files/` provides read-only access to the entire VM filesystem. Only accessible through the tunnel URL and requires the connection token. No upload or delete functionality is exposed.
@@ -218,6 +293,7 @@ The file explorer at `/files/` provides read-only access to the entire VM filesy
 - Add more `actions/setup-*` steps for Go, Rust, .NET, etc.
 - Use `windows-latest` or `macos-latest` runners
 - Set up a Cloudflare Zero Trust policy for extra auth
+- Use Tailscale for private access or Tailscale Funnel for public access without Cloudflare
 - Use self-hosted runners for sessions longer than 6 hours
 - Add a webhook to post the URL to Slack/Discord
 
@@ -228,7 +304,7 @@ The file explorer at `/files/` provides read-only access to the entire VM filesy
 scripts/
 ├── restore-workspace.sh           # Download + extract previous artifact
 ├── setup-tools.sh                 # OpenCode, Android, dotfiles, init hook
-├── start-ide.sh                   # openvscode-server + file-server + tunnel
+├── start-ide.sh                   # openvscode-server + file-server + tunnel (cloudflared/tailscale)
 ├── file-server.mjs                # Custom Node.js: reverse proxy + file explorer
 ├── watch-inactivity.sh            # Connection monitoring + auto-shutdown
 └── save-workspace.sh              # Package workspace for artifact upload

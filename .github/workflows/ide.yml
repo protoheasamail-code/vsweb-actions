@@ -57,6 +57,28 @@ on:
         description: GitHub PAT with repo scope for git push from IDE (stored in /tmp/.git-creds, chmod 600)
         required: false
         default: ''
+      tunnel-provider:
+        description: 'Tunnel backend: cloudflared, tailscale, or both'
+        required: false
+        default: 'cloudflared'
+        type: choice
+        options:
+          - cloudflared
+          - tailscale
+          - both
+      tailscale-auth-key:
+        description: Pre-auth Tailscale auth key (required when tunnel-provider includes tailscale). Generate at https://login.tailscale.com/admin/settings/keys
+        required: false
+        default: ''
+      tailscale-funnel:
+        description: Expose via Tailscale Funnel (public) instead of tailnet-only (private)
+        required: false
+        default: false
+        type: boolean
+      tailscale-hostname:
+        description: 'Fixed Tailscale node name (e.g. vscode-ide). Default: runner hostname (changes each run).'
+        required: false
+        default: ''
 
 env:
   VSCODE_PORT: 3000
@@ -72,6 +94,10 @@ env:
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
   ANDROID_HOME: /usr/local/lib/android/sdk
   DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+  TUNNEL_PROVIDER: ${{ inputs.tunnel-provider }}
+  TAILSCALE_AUTH_KEY: ${{ inputs.tailscale-auth-key }}
+  TAILSCALE_FUNNEL: ${{ inputs.tailscale-funnel }}
+  TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
 
 jobs:
   ide:
@@ -111,6 +137,12 @@ jobs:
         if: inputs.git-pat == '' && inputs.git-user-name == '' && inputs.git-user-email == ''
         run: bash ${{ github.workspace }}/scripts/discord-notify.sh "🔑 **Git config:** ⏭️ SKIPPED"
 
+      - name: Mask Tailscale auth key
+        if: inputs.tailscale-auth-key != ''
+        env:
+          _TS_KEY: ${{ inputs.tailscale-auth-key }}
+        run: echo "::add-mask::$_TS_KEY"
+
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
@@ -149,6 +181,10 @@ jobs:
         env:
           IDE_ROOT_DIR: ${{ inputs.ide-root-dir }}
           DEFAULT_FOLDER: ${{ steps.clone.outputs.target || inputs.ide-root-dir }}
+          TUNNEL_PROVIDER: ${{ inputs.tunnel-provider }}
+          TAILSCALE_AUTH_KEY: ${{ inputs.tailscale-auth-key }}
+          TAILSCALE_FUNNEL: ${{ inputs.tailscale-funnel }}
+          TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
         run: bash ${{ github.workspace }}/scripts/start-ide.sh
 
       - name: IDE session (create /continue to end, or wait for inactivity)
