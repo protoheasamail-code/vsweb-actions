@@ -10,8 +10,8 @@ MESSAGE="${1:-}"
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK:-}"
 
 if [ -z "$DISCORD_WEBHOOK" ]; then
-  echo "ERROR: DISCORD_WEBHOOK is not set" >&2
-  exit 1
+  echo "Discord webhook not configured, skipping notification"
+  exit 0
 fi
 
 if [ -z "$MESSAGE" ]; then
