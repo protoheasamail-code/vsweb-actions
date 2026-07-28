@@ -9,6 +9,7 @@ TUNNEL_PORT="${TUNNEL_PORT:-3001}"
 TUNNEL_PROVIDER="${TUNNEL_PROVIDER:-cloudflared}"
 TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
 TAILSCALE_FUNNEL="${TAILSCALE_FUNNEL:-false}"
+TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-}"
 ENABLE_SSH="${ENABLE_SSH:-false}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -204,7 +205,14 @@ setup_tailscale() {
   fi
 
   echo "Joining Tailscale network..."
-  sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" --hostname="$(hostname)" 2>&1 || {
+  TS_HOSTNAME_FLAG=""
+  if [ -n "$TAILSCALE_HOSTNAME" ]; then
+    TS_HOSTNAME_FLAG="--hostname=$TAILSCALE_HOSTNAME"
+    echo "Using fixed hostname: $TAILSCALE_HOSTNAME"
+  else
+    TS_HOSTNAME_FLAG="--hostname=$(hostname)"
+  fi
+  sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" $TS_HOSTNAME_FLAG 2>&1 || {
     echo "ERROR: Tailscale up failed"
     return 1
   }

@@ -51,6 +51,7 @@ All configurable from the GitHub Actions UI when triggering the workflow:
 | `tunnel-provider` | `cloudflared` | Tunnel backend: `cloudflared`, `tailscale`, or `both`. |
 | `tailscale-auth-key` | `""` | Pre-auth Tailscale auth key (required when using Tailscale). Generate at https://login.tailscale.com/admin/settings/keys |
 | `tailscale-funnel` | `false` | When using Tailscale, expose publicly via [Tailscale Funnel](https://tailscale.com/kb/1223/funnel/) instead of tailnet-only. |
+| `tailscale-hostname` | `""` | Fixed Tailscale node name (e.g. `vscode-ide`). Default uses the runner hostname which changes each run. |
 
 ## Workspace Persistence
 
@@ -205,6 +206,11 @@ Tailscale provides an alternative to Cloudflare tunnels. It joins your runner to
 # Private access via Tailscale (requires Tailscale on your local machine)
 tunnel-provider: tailscale
 tailscale-auth-key: tskey-auth-kHxxxx...
+
+# With a fixed hostname (same URL every run)
+tunnel-provider: tailscale
+tailscale-auth-key: tskey-auth-kHxxxx...
+tailscale-hostname: vscode-ide
 
 # Public access via Tailscale Funnel
 tunnel-provider: tailscale

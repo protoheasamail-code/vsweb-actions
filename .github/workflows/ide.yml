@@ -75,6 +75,10 @@ on:
         required: false
         default: false
         type: boolean
+      tailscale-hostname:
+        description: 'Fixed Tailscale node name (e.g. vscode-ide). Default: runner hostname (changes each run).'
+        required: false
+        default: ''
 
 env:
   VSCODE_PORT: 3000
@@ -93,6 +97,7 @@ env:
   TUNNEL_PROVIDER: ${{ inputs.tunnel-provider }}
   TAILSCALE_AUTH_KEY: ${{ inputs.tailscale-auth-key }}
   TAILSCALE_FUNNEL: ${{ inputs.tailscale-funnel }}
+  TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
 
 jobs:
   ide:
@@ -179,6 +184,7 @@ jobs:
           TUNNEL_PROVIDER: ${{ inputs.tunnel-provider }}
           TAILSCALE_AUTH_KEY: ${{ inputs.tailscale-auth-key }}
           TAILSCALE_FUNNEL: ${{ inputs.tailscale-funnel }}
+          TAILSCALE_HOSTNAME: ${{ inputs.tailscale-hostname }}
         run: bash ${{ github.workspace }}/scripts/start-ide.sh
 
       - name: IDE session (create /continue to end, or wait for inactivity)
