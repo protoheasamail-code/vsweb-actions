@@ -232,15 +232,16 @@ setup_tailscale() {
 
 get_tailscale_hostname() {
   # jq is available on GitHub Actions runners (Node.js ships with it)
-  sudo tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null || true
+  # Strip trailing FQDN dot (e.g., "node.tail.net." → "node.tail.net")
+  sudo tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' 2>/dev/null | sed 's/\.$//' || true
 }
 
 start_tailscale_tunnel() {
   ACTUAL_TS_HOSTNAME=$(get_tailscale_hostname)
 
   if [ "$TAILSCALE_FUNNEL" = "true" ]; then
-    echo "Starting Tailscale Funnel for HTTP..."
-    sudo tailscale funnel --bg "http://localhost:$TUNNEL_PORT" 2>&1 || {
+    echo "Starting Tailscale Funnel..."
+    sudo tailscale funnel --bg "$TUNNEL_PORT" 2>&1 || {
       echo "Warning: Tailscale Funnel failed (non-fatal)"
     }
     TUNNEL_URL="https://${ACTUAL_TS_HOSTNAME}"
